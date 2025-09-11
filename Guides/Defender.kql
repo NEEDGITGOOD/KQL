@@ -1,0 +1,66 @@
+SecurityIncident
+| extend AlertIds_Array = parse_json(tostring(AlertIds))
+| mv-expand AlertId = AlertIds_Array to typeof(string)
+| join kind=leftouter (
+    SecurityAlert
+    | project 
+        SystemAlertId,
+        AlertSeverity,
+        ProductName,
+        ProviderName,
+        Tactics,
+        Techniques,
+        CompromisedEntity
+) on $left.AlertId == $right.SystemAlertId
+| join kind=leftouter (
+    AlertInfo
+    | extend CleanAlertId = substring(AlertId, 2)
+    | project 
+        CleanAlertId,
+        ServiceSource,
+        DetectionSource
+) on $left.SystemAlertId == $right.CleanAlertId
+| extend AdditionalDataParsed = parse_json(tostring(AdditionalData))
+| extend LabelsParsed = parse_json(tostring(Labels))
+| extend OwnerParsed = parse_json(tostring(Owner))
+| extend TagsList = coalesce(extract_all(@'"labelName":"([^"]*)"', tostring(LabelsParsed)), dynamic([]))
+| summarize 
+    arg_max(TimeGenerated, *),
+    ActiveAlerts = dcount(AlertId),
+    ServiceSources = make_set(ServiceSource),
+    DetectionSources = make_set(DetectionSource),
+    ProductNames = make_set(ProductName),
+    ImpactedAssets = make_set(CompromisedEntity)
+by IncidentName, IncidentNumber
+| project 
+    IncidentName = Title,
+    IncidentId = IncidentName,
+    IncidentNumber,
+    Tags = strcat_array(TagsList, ", "),
+    Severity,
+    InvestigationState = coalesce(Classification, Status),
+    Categories = coalesce(strcat_array(AdditionalDataParsed.tactics, ", "), ""),
+    ImpactedAssets = strcat_array(
+        array_sort_asc(
+            array_concat(
+                ImpactedAssets,
+                pack_array(tostring(OwnerParsed.assignedTo))
+            )
+        ), ", "
+    ),
+    ActiveAlerts,
+    ServiceSources = strcat_array(ServiceSources, ", "),
+    DetectionSources = strcat_array(DetectionSources, ", "),
+    ProductNames = strcat_array(ProductNames, ", "),
+    LastUpdateTime = LastModifiedTime,
+    FirstActivity = FirstActivityTime,
+    LastActivity = LastActivityTime,
+    CreatedTime,
+    Status,
+    AssignedTo = tostring(OwnerParsed.userPrincipalName),
+    Classification,
+    Determination = ClassificationReason,
+    Description = substring(Description, 0, 200),
+    IncidentUrl
+| order by LastUpdateTime desc
+| limit 100
