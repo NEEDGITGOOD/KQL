@@ -1,66 +1,101 @@
+// === Month window configuration ===
+let MonthSelector = '{MonthSelector}';       // "Current" or "Last"
+let TimeZone = 'Europe/Berlin';
+let localNow = datetime_utc_to_local(now(), TimeZone);
+let startLocal = iif(MonthSelector =~ 'Current', startofmonth(localNow), startofmonth(datetime_add('month', -1, localNow)));
+let endLocal   = iif(MonthSelector =~ 'Current', endofmonth(localNow), endofmonth(datetime_add('month', -1, localNow)));
+let MonthStart = datetime_local_to_utc(startLocal, TimeZone);
+let MonthEnd   = datetime_local_to_utc(endLocal, TimeZone);
+let MonthLabel = format_datetime(startLocal, 'MMMM yyyy');
+
+// === Main query ===
 SecurityIncident
-| extend AlertIds_Array = parse_json(tostring(AlertIds))
-| mv-expand AlertId = AlertIds_Array to typeof(string)
+// Apply month filter early for better performance
+| where CreatedTime between (MonthStart .. MonthEnd)
+// Parse JSON fields once at the beginning
+| extend 
+    ParsedLabels = parse_json(Labels),
+    ParsedAdditionalData = parse_json(AdditionalData),
+    ParsedExtendedProperties = parse_json(ExtendedProperties),
+    ParsedOwner = parse_json(Owner)
+// Extract commonly used fields
+| extend 
+    LabelName = ParsedLabels["labelName"],
+    Tactics = ParsedAdditionalData["tactics"],
+    Determination = ParsedExtendedProperties["Determination"],
+    ExtendedPropertiesStatus = ParsedExtendedProperties["Status"],
+    ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = ParsedExtendedProperties["MicrosoftDefenderAtp.InvestigationState"],
+    AssignedTo = coalesce(tostring(ParsedOwner["assignedTo"]), "Unassigned")
+// Expand multi-value fields
+| mv-expand AlertIds to typeof(string)
+// Join with SecurityAlert (most recent entry per alert)
 | join kind=leftouter (
     SecurityAlert
-    | project 
-        SystemAlertId,
-        AlertSeverity,
-        ProductName,
-        ProviderName,
-        Tactics,
-        Techniques,
-        CompromisedEntity
-) on $left.AlertId == $right.SystemAlertId
+    | summarize arg_max(TimeGenerated, *) by SystemAlertId
+) on $left.AlertIds == $right.SystemAlertId
+// Join with AlertInfo
 | join kind=leftouter (
-    AlertInfo
-    | extend CleanAlertId = substring(AlertId, 2)
+    AlertInfo 
     | project 
-        CleanAlertId,
-        ServiceSource,
-        DetectionSource
-) on $left.SystemAlertId == $right.CleanAlertId
-| extend AdditionalDataParsed = parse_json(tostring(AdditionalData))
-| extend LabelsParsed = parse_json(tostring(Labels))
-| extend OwnerParsed = parse_json(tostring(Owner))
-| extend TagsList = coalesce(extract_all(@'"labelName":"([^"]*)"', tostring(LabelsParsed)), dynamic([]))
+        Title, 
+        AlertInfo_DetectionSource = DetectionSource, 
+        AlertInfo_ServiceSource = ServiceSource, 
+        AlertInfo_Category = Category, 
+        AlertInfo_TimeGenerated = TimeGenerated
+) on $left.DisplayName == $right.Title
+// Join with AlertEvidence
+| join kind=leftouter (
+    AlertEvidence
+    | project 
+        Title, 
+        AlertEvidence_DetectionSource = DetectionSource, 
+        AlertEvidence_ServiceSource = ServiceSource, 
+        AlertEvidence_TimeGenerated = TimeGenerated, 
+        AlertEvidence_Category = Categories
+) on $left.Title == $right.Title
+// Consolidate detection fields using coalesce
+| extend 
+    AlertTimeGeneral = coalesce(AlertInfo_TimeGenerated, AlertEvidence_TimeGenerated),
+    DetectionSource = coalesce(AlertInfo_DetectionSource, AlertEvidence_DetectionSource),
+    ServiceSource = coalesce(AlertInfo_ServiceSource, AlertEvidence_ServiceSource),
+    Category = coalesce(AlertInfo_Category, AlertEvidence_Category)
+// Filter alerts within 3-hour window of incident creation
+| where isnotempty(AlertTimeGeneral) and abs(datetime_diff('hour', CreatedTime, AlertTimeGeneral)) <= 3
+// Exclude Defender XDR early to reduce processing
+| where ServiceSource != "Defender XDR"
+// Aggregate by incident
 | summarize 
     arg_max(TimeGenerated, *),
-    ActiveAlerts = dcount(AlertId),
-    ServiceSources = make_set(ServiceSource),
-    DetectionSources = make_set(DetectionSource),
-    ProductNames = make_set(ProductName),
-    ImpactedAssets = make_set(CompromisedEntity)
-by IncidentName, IncidentNumber
-| project 
-    IncidentName = Title,
-    IncidentId = IncidentName,
-    IncidentNumber,
-    Tags = strcat_array(TagsList, ", "),
-    Severity,
-    InvestigationState = coalesce(Classification, Status),
-    Categories = coalesce(strcat_array(AdditionalDataParsed.tactics, ", "), ""),
-    ImpactedAssets = strcat_array(
-        array_sort_asc(
-            array_concat(
-                ImpactedAssets,
-                pack_array(tostring(OwnerParsed.assignedTo))
-            )
-        ), ", "
-    ),
-    ActiveAlerts,
-    ServiceSources = strcat_array(ServiceSources, ", "),
-    DetectionSources = strcat_array(DetectionSources, ", "),
-    ProductNames = strcat_array(ProductNames, ", "),
-    LastUpdateTime = LastModifiedTime,
-    FirstActivity = FirstActivityTime,
-    LastActivity = LastActivityTime,
+    TagsSet = strcat_array(make_set(LabelName, 100), ", "),
+    TacticsSet = strcat_array(make_set(Tactics, 20), ", "),
+    DeterminationSet = strcat_array(make_set(Determination, 10), ", "),
+    CategorySet = strcat_array(make_set(Category, 50), ", "),
+    ProductNameSet = strcat_array(make_set(ProductName, 20), ", "),
+    ServiceSources = strcat_array(make_set(ServiceSource, 20), ", "),
+    DetectionSources = strcat_array(make_set(DetectionSource, 20), ", ")
+  by ProviderIncidentId
+// Calculate investigation state
+| extend InvestigationState = case(
+    isnotempty(ExtendedPropertiesStatus), ExtendedPropertiesStatus,
+    isnotempty(ExtendedPropertiesMicrosoftDefenderAtpInvestigationState), ExtendedPropertiesMicrosoftDefenderAtpInvestigationState,
+    "Not applicable"
+)
+// Final projection with clean field names
+| project
     CreatedTime,
-    Status,
-    AssignedTo = tostring(OwnerParsed.userPrincipalName),
+    ["Incident name"] = Title,
+    ["Incident Id"] = ProviderIncidentId,
+    ["Tags"] = TagsSet,
+    Severity,
+    ["Investigation state"] = InvestigationState,
+    Categories = CategorySet,
+    ServiceSources,
+    DetectionSources,
+    ProductName = ProductNameSet,
+    ["Last Activity"] = LastActivityTime,
+    ["Status"] = Status,  // Fixed: was Status1
+    AssignedTo,
     Classification,
-    Determination = ClassificationReason,
-    Description = substring(Description, 0, 200),
-    IncidentUrl
-| order by LastUpdateTime desc
-| limit 100
+    Determination = DeterminationSet,
+    ["Month"] = MonthLabel  // Added to show which month is being displayed
+| sort by CreatedTime desc
