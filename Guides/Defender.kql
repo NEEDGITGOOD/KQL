@@ -12,22 +12,8 @@ let MonthLabel = format_datetime(startLocal, 'MMMM yyyy');
 SecurityIncident
 // Apply month filter early for better performance
 | where CreatedTime between (MonthStart .. MonthEnd)
-// Parse JSON fields once at the beginning
-| extend 
-    ParsedLabels = parse_json(Labels),
-    ParsedAdditionalData = parse_json(AdditionalData),
-    ParsedExtendedProperties = parse_json(ExtendedProperties),
-    ParsedOwner = parse_json(Owner)
-// Extract commonly used fields
-| extend 
-    LabelName = ParsedLabels["labelName"],
-    Tactics = ParsedAdditionalData["tactics"],
-    Determination = ParsedExtendedProperties["Determination"],
-    ExtendedPropertiesStatus = ParsedExtendedProperties["Status"],
-    ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = ParsedExtendedProperties["MicrosoftDefenderAtp.InvestigationState"],
-    AssignedTo = coalesce(tostring(ParsedOwner["assignedTo"]), "Unassigned")
 // Expand multi-value fields
-| mv-expand AlertIds to typeof(string)
+| mv-expand AlertIds to typeof(string), Labels to typeof(string), Comments to typeof(string), AdditionalData to typeof(string)
 // Join with SecurityAlert (most recent entry per alert)
 | join kind=leftouter (
     SecurityAlert
@@ -38,9 +24,9 @@ SecurityIncident
     AlertInfo 
     | project 
         Title, 
-        AlertInfo_DetectionSource = DetectionSource, 
-        AlertInfo_ServiceSource = ServiceSource, 
-        AlertInfo_Category = Category, 
+        DetectionSource, 
+        ServiceSource, 
+        Category, 
         AlertInfo_TimeGenerated = TimeGenerated
 ) on $left.DisplayName == $right.Title
 // Join with AlertEvidence
@@ -53,16 +39,17 @@ SecurityIncident
         AlertEvidence_TimeGenerated = TimeGenerated, 
         AlertEvidence_Category = Categories
 ) on $left.Title == $right.Title
-// Consolidate detection fields using coalesce
-| extend 
-    AlertTimeGeneral = coalesce(AlertInfo_TimeGenerated, AlertEvidence_TimeGenerated),
-    DetectionSource = coalesce(AlertInfo_DetectionSource, AlertEvidence_DetectionSource),
-    ServiceSource = coalesce(AlertInfo_ServiceSource, AlertEvidence_ServiceSource),
-    Category = coalesce(AlertInfo_Category, AlertEvidence_Category)
+// Extract fields from JSON
+| extend LabelName = parse_json(Labels)["labelName"]
+| extend Tactics = parse_json(AdditionalData)["tactics"]
+| extend Determination = parse_json(ExtendedProperties)["Determination"]
+// Consolidate detection fields
+| extend AlertTimeGeneral = coalesce(AlertInfo_TimeGenerated, AlertEvidence_TimeGenerated)
+| extend DetectionSource = coalesce(DetectionSource, AlertEvidence_DetectionSource)
+| extend ServiceSource = coalesce(ServiceSource, AlertEvidence_ServiceSource)
+| extend Category = coalesce(Category, AlertEvidence_Category)
 // Filter alerts within 3-hour window of incident creation
 | where isnotempty(AlertTimeGeneral) and abs(datetime_diff('hour', CreatedTime, AlertTimeGeneral)) <= 3
-// Exclude Defender XDR early to reduce processing
-| where ServiceSource != "Defender XDR"
 // Aggregate by incident
 | summarize 
     arg_max(TimeGenerated, *),
@@ -74,12 +61,17 @@ SecurityIncident
     ServiceSources = strcat_array(make_set(ServiceSource, 20), ", "),
     DetectionSources = strcat_array(make_set(DetectionSource, 20), ", ")
   by ProviderIncidentId
-// Calculate investigation state
+// Parse ExtendedProperties and Owner after aggregation
+| extend ExtendedPropertiesStatus = parse_json(ExtendedProperties)["Status"]
+| extend ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = parse_json(ExtendedProperties)["MicrosoftDefenderAtp.InvestigationState"]
 | extend InvestigationState = case(
     isnotempty(ExtendedPropertiesStatus), ExtendedPropertiesStatus,
     isnotempty(ExtendedPropertiesMicrosoftDefenderAtpInvestigationState), ExtendedPropertiesMicrosoftDefenderAtpInvestigationState,
     "Not applicable"
 )
+| extend AssignedTo = coalesce(tostring(parse_json(Owner)["assignedTo"]), "Unassigned")
+// Filter out Defender XDR
+| where ServiceSources != "Defender XDR"
 // Final projection with clean field names
 | project
     CreatedTime,
@@ -93,9 +85,9 @@ SecurityIncident
     DetectionSources,
     ProductName = ProductNameSet,
     ["Last Activity"] = LastActivityTime,
-    ["Status"] = Status,  // Fixed: was Status1
+    ["Status"] = Status,
     AssignedTo,
     Classification,
     Determination = DeterminationSet,
-    ["Month"] = MonthLabel  // Added to show which month is being displayed
+    ["Month"] = MonthLabel
 | sort by CreatedTime desc
