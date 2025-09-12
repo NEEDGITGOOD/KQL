@@ -8,78 +8,56 @@ let MonthStart = datetime_local_to_utc(startLocal, TimeZone);
 let MonthEnd   = datetime_local_to_utc(endLocal, TimeZone);
 let MonthLabel = format_datetime(startLocal, 'MMMM yyyy');
 
-// === Main query with memory optimizations ===
+// === Restructured query to avoid memory issues ===
 SecurityIncident
-// Apply month filter IMMEDIATELY to reduce data
+// Aggressive filtering first
 | where CreatedTime between (MonthStart .. MonthEnd)
 | where TimeGenerated between (MonthStart .. MonthEnd)
-// Only expand AlertIds (most critical field)
-| mv-expand AlertIds to typeof(string)
-// Join with filtered SecurityAlert
-| join kind=leftouter hint.strategy=broadcast (
+// Parse JSON once before expansion
+| extend 
+    ParsedLabels = parse_json(Labels),
+    ParsedAdditionalData = parse_json(AdditionalData),
+    ParsedExtendedProperties = parse_json(ExtendedProperties),
+    ParsedOwner = parse_json(Owner)
+// Extract fields WITHOUT mv-expand first
+| extend 
+    LabelName = tostring(ParsedLabels["labelName"]),
+    Tactics = tostring(ParsedAdditionalData["tactics"]),
+    Determination = tostring(ParsedExtendedProperties["Determination"]),
+    ExtendedPropertiesStatus = tostring(ParsedExtendedProperties["Status"]),
+    ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = tostring(ParsedExtendedProperties["MicrosoftDefenderAtp.InvestigationState"]),
+    AssignedTo = coalesce(tostring(ParsedOwner["assignedTo"]), "Unassigned"),
+    FirstAlertId = tostring(extract("\"([^\"]+)\"", 1, tostring(AlertIds)))  // Get just first alert for joining
+// Join with just the first alert to get basic info
+| join kind=leftouter (
     SecurityAlert
     | where TimeGenerated between (MonthStart .. MonthEnd)
-    | summarize arg_max(TimeGenerated, DisplayName, ProductName) by SystemAlertId
-) on $left.AlertIds == $right.SystemAlertId
-// Join with filtered AlertInfo
-| join kind=leftouter hint.strategy=broadcast (
-    AlertInfo 
-    | where TimeGenerated between (MonthStart .. MonthEnd)
-    | project Title, DetectionSource, ServiceSource, Category, AlertInfo_TimeGenerated = TimeGenerated
-) on $left.DisplayName == $right.Title
-// Join with filtered AlertEvidence
-| join kind=leftouter hint.strategy=broadcast (
-    AlertEvidence
-    | where TimeGenerated between (MonthStart .. MonthEnd)
-    | project Title, AlertEvidence_DetectionSource = DetectionSource, AlertEvidence_ServiceSource = ServiceSource, AlertEvidence_TimeGenerated = TimeGenerated, AlertEvidence_Category = Categories
-) on $left.Title == $right.Title
-// Parse JSON fields
-| extend LabelName = parse_json(Labels)["labelName"]
-| extend Tactics = parse_json(AdditionalData)["tactics"]
-| extend Determination = parse_json(ExtendedProperties)["Determination"]
-// Consolidate fields
-| extend AlertTimeGeneral = coalesce(AlertInfo_TimeGenerated, AlertEvidence_TimeGenerated)
-| extend DetectionSource = coalesce(DetectionSource, AlertEvidence_DetectionSource)
-| extend ServiceSource = coalesce(ServiceSource, AlertEvidence_ServiceSource)
-| extend Category = coalesce(Category, AlertEvidence_Category)
-// Filter early to reduce data
+    | project SystemAlertId, DisplayName, ProductName, ServiceSource, DetectionSource
+) on $left.FirstAlertId == $right.SystemAlertId
+// Filter out Defender XDR early
 | where ServiceSource != "Defender XDR"
-| where isnotempty(AlertTimeGeneral) and abs(datetime_diff('hour', CreatedTime, AlertTimeGeneral)) <= 3
-// Aggregate with limited sets
-| summarize 
-    arg_max(TimeGenerated, Title, Severity, Status, Classification, ClassificationReason, ExtendedProperties, Owner, LastActivityTime, ProductName),
-    TagsSet = strcat_array(make_set(LabelName, 10), ", "),
-    TacticsSet = strcat_array(make_set(Tactics, 10), ", "),
-    DeterminationSet = strcat_array(make_set(Determination, 5), ", "),
-    CategorySet = strcat_array(make_set(Category, 10), ", "),
-    ServiceSources = strcat_array(make_set(ServiceSource, 5), ", "),
-    DetectionSources = strcat_array(make_set(DetectionSource, 5), ", ")
-  by ProviderIncidentId
-// Parse remaining fields
-| extend ExtendedPropertiesStatus = parse_json(ExtendedProperties)["Status"]
-| extend ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = parse_json(ExtendedProperties)["MicrosoftDefenderAtp.InvestigationState"]
+// Calculate investigation state
 | extend InvestigationState = case(
     isnotempty(ExtendedPropertiesStatus), ExtendedPropertiesStatus,
     isnotempty(ExtendedPropertiesMicrosoftDefenderAtpInvestigationState), ExtendedPropertiesMicrosoftDefenderAtpInvestigationState,
     "Not applicable"
 )
-| extend AssignedTo = coalesce(tostring(parse_json(Owner)["assignedTo"]), "Unassigned")
-// Final projection
+// Final projection without complex aggregations
 | project
     CreatedTime,
     ["Incident name"] = Title,
     ["Incident Id"] = ProviderIncidentId,
-    ["Tags"] = TagsSet,
+    ["Tags"] = LabelName,
     Severity,
     ["Investigation state"] = InvestigationState,
-    Categories = CategorySet,
-    ServiceSources,
-    DetectionSources,
+    Categories = "",  // Simplified - remove if not critical
+    ServiceSources = ServiceSource,
+    DetectionSources = DetectionSource,
     ProductName,
     ["Last Activity"] = LastActivityTime,
     ["Status"] = Status,
     AssignedTo,
     Classification,
-    Determination = DeterminationSet
+    Determination
 | sort by CreatedTime desc
-| take 1000  // Limit results to prevent memory issues
+| take 500  // Limit results
