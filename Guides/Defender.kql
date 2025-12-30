@@ -1,63 +1,42 @@
-// === Month window configuration ===
-let MonthSelector = '{MonthSelector}';       // "Current" or "Last"
-let TimeZone = 'Europe/Berlin';
-let localNow = datetime_utc_to_local(now(), TimeZone);
-let startLocal = iif(MonthSelector =~ 'Current', startofmonth(localNow), startofmonth(datetime_add('month', -1, localNow)));
-let endLocal   = iif(MonthSelector =~ 'Current', endofmonth(localNow), endofmonth(datetime_add('month', -1, localNow)));
-let MonthStart = datetime_local_to_utc(startLocal, TimeZone);
-let MonthEnd   = datetime_local_to_utc(endLocal, TimeZone);
-let MonthLabel = format_datetime(startLocal, 'MMMM yyyy');
+// Get the latest state of each device (for true LastSeen)
+let LatestDeviceState = DeviceInfo
+| where Timestamp > ago(90d)
+| summarize arg_max(Timestamp, *) by DeviceId
+| project DeviceId, 
+          LastSeen = Timestamp, 
+          CurrentMitigationStatus = MitigationStatus,
+          DeviceName, OSPlatform, OSVersion, PublicIP, MachineGroup, ExposureLevel, LoggedOnUsers;
 
-// === Restructured query to avoid memory issues ===
-SecurityIncident
-// Aggressive filtering first
-| where CreatedTime between (MonthStart .. MonthEnd)
-| where TimeGenerated between (MonthStart .. MonthEnd)
-// Parse JSON once before expansion
-| extend 
-    ParsedLabels = parse_json(Labels),
-    ParsedAdditionalData = parse_json(AdditionalData),
-    ParsedExtendedProperties = parse_json(ExtendedProperties),
-    ParsedOwner = parse_json(Owner)
-// Extract fields WITHOUT mv-expand first
-| extend 
-    LabelName = tostring(ParsedLabels["labelName"]),
-    Tactics = tostring(ParsedAdditionalData["tactics"]),
-    Determination = tostring(ParsedExtendedProperties["Determination"]),
-    ExtendedPropertiesStatus = tostring(ParsedExtendedProperties["Status"]),
-    ExtendedPropertiesMicrosoftDefenderAtpInvestigationState = tostring(ParsedExtendedProperties["MicrosoftDefenderAtp.InvestigationState"]),
-    AssignedTo = coalesce(tostring(ParsedOwner["assignedTo"]), "Unassigned"),
-    FirstAlertId = tostring(extract("\"([^\"]+)\"", 1, tostring(AlertIds)))  // Get just first alert for joining
-// Join with just the first alert to get basic info
-| join kind=leftouter (
-    SecurityAlert
-    | where TimeGenerated between (MonthStart .. MonthEnd)
-    | project SystemAlertId, DisplayName, ProductName, ServiceSource, DetectionSource
-) on $left.FirstAlertId == $right.SystemAlertId
-// Filter out Defender XDR early
-| where ServiceSource != "Defender XDR"
-// Calculate investigation state
-| extend InvestigationState = case(
-    isnotempty(ExtendedPropertiesStatus), ExtendedPropertiesStatus,
-    isnotempty(ExtendedPropertiesMicrosoftDefenderAtpInvestigationState), ExtendedPropertiesMicrosoftDefenderAtpInvestigationState,
-    "Not applicable"
-)
-// Final projection without complex aggregations
+// Get the first isolation time per device
+let IsolationEvents = DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize IsolationTime = min(Timestamp) by DeviceId;
+
+// Join them together
+IsolationEvents
+| join kind=inner LatestDeviceState on DeviceId
+| extend IsCurrentlyIsolated = tostring(CurrentMitigationStatus) contains "true"
+| extend IsolationDuration = iff(IsCurrentlyIsolated, 
+                                  format_timespan(now() - IsolationTime, 'd.hh:mm'),
+                                  "Released")
+// Handle LoggedOnUsers
+| extend LoggedOnUsers = todynamic(LoggedOnUsers)
+| extend LoggedOnUsers = iif(isnull(LoggedOnUsers) or array_length(LoggedOnUsers) == 0,
+                             dynamic([{"UserName": "N/A"}]),
+                             LoggedOnUsers)
+| mv-expand LoggedOnUsers to typeof(dynamic)
+| extend UserName = coalesce(tostring(LoggedOnUsers.UserName), "N/A")
 | project
-    CreatedTime,
-    ["Incident name"] = Title,
-    ["Incident Id"] = ProviderIncidentId,
-    ["Tags"] = LabelName,
-    Severity,
-    ["Investigation state"] = InvestigationState,
-    Categories = "",  // Simplified - remove if not critical
-    ServiceSources = ServiceSource,
-    DetectionSources = DetectionSource,
-    ProductName,
-    ["Last Activity"] = LastActivityTime,
-    ["Status"] = Status,
-    AssignedTo,
-    Classification,
-    Determination
-| sort by CreatedTime desc
-| take 500  // Limit results
+    DeviceName,
+    OSPlatform,
+    UserName,
+    OSVersion,
+    IsolationTime = format_datetime(IsolationTime, 'yyyy-MM-dd HH:mm'),
+    LastSeen = format_datetime(LastSeen, 'yyyy-MM-dd HH:mm'),
+    IsolationDuration,
+    IsCurrentlyIsolated,
+    PublicIP,
+    MachineGroup,
+    ExposureLevel
+| order by IsCurrentlyIsolated desc, IsolationTime desc
