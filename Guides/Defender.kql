@@ -1,51 +1,196 @@
-// Get the latest state of each device (for true LastSeen)
-let LatestDeviceState = DeviceInfo
-| where Timestamp > ago(90d)
-| summarize arg_max(Timestamp, *) by DeviceId
-| project DeviceId, 
-          LastSeen = Timestamp, 
-          CurrentMitigationStatus = MitigationStatus,
-          DeviceName, OSPlatform, OSVersion, PublicIP, MachineGroup, ExposureLevel, LoggedOnUsers;
-// Get the first isolation time per device
-let IsolationEvents = DeviceInfo
+## Summary KPIs (Card visuals)
+
+```kql
+DeviceInfo
 | where Timestamp > ago(90d)
 | where tostring(MitigationStatus) contains "true"
-| summarize IsolationTime = min(Timestamp) by DeviceId;
-// Find when devices were released (first non-isolated record AFTER being isolated)
-let ReleaseEvents = DeviceInfo
+| summarize IsolationTime = min(Timestamp) by DeviceId
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp > ago(90d)
+    | summarize arg_max(Timestamp, *) by DeviceId
+) on DeviceId
+| extend IsCurrentlyIsolated = tostring(MitigationStatus) contains "true"
+| summarize 
+    TotalIsolationsLast90Days = count(),
+    CurrentlyIsolated = countif(IsCurrentlyIsolated),
+    ReleasedDevices = countif(not(IsCurrentlyIsolated))
+```
+
+**Visuals:**
+- 🔒 Currently Isolated (big number)
+- 📊 Total Isolations (90d)
+- ✅ Released Devices
+- ⏱️ Average Isolation Duration
+
+---
+
+## Isolation Trend Over Time (Line/Area chart)
+
+```kql
+DeviceInfo
 | where Timestamp > ago(90d)
-| where tostring(MitigationStatus) !contains "true"
-| join kind=inner IsolationEvents on DeviceId
-| where Timestamp > IsolationTime  // Only consider records after isolation started
-| summarize ReleasedTime = min(Timestamp) by DeviceId;
-// Bring it all together
-IsolationEvents
-| join kind=inner LatestDeviceState on DeviceId
-| join kind=leftouter ReleaseEvents on DeviceId  // leftouter because not all devices are released
-| extend IsCurrentlyIsolated = tostring(CurrentMitigationStatus) contains "true"
-| extend IsolationEndTime = iff(IsCurrentlyIsolated, now(), ReleasedTime)
-| extend IsolationDurationTimespan = IsolationEndTime - IsolationTime
-| extend IsolationDuration = format_timespan(IsolationDurationTimespan, 'd.hh:mm')
-| extend Status = iff(IsCurrentlyIsolated, "🔒 Isolated", "✅ Released")
-// Handle LoggedOnUsers
-| extend LoggedOnUsers = todynamic(LoggedOnUsers)
-| extend LoggedOnUsers = iif(isnull(LoggedOnUsers) or array_length(LoggedOnUsers) == 0,
-                             dynamic([{"UserName": "N/A"}]),
-                             LoggedOnUsers)
-| mv-expand LoggedOnUsers to typeof(dynamic)
-| extend UserName = coalesce(tostring(LoggedOnUsers.UserName), "N/A")
-| project
-    DeviceName,
-    Status,
-    OSPlatform,
-    UserName,
-    OSVersion,
-    IsolationTime = format_datetime(IsolationTime, 'yyyy-MM-dd HH:mm'),
-    ReleasedTime = iff(IsCurrentlyIsolated, "—", format_datetime(ReleasedTime, 'yyyy-MM-dd HH:mm')),
-    IsolationDuration,
-    LastSeen = format_datetime(LastSeen, 'yyyy-MM-dd HH:mm'),
-    PublicIP,
-    MachineGroup,
-    ExposureLevel,
-    IsCurrentlyIsolated
-| order by IsCurrentlyIsolated desc, IsolationTime desc
+| where tostring(MitigationStatus) contains "true"
+| summarize IsolationTime = min(Timestamp) by DeviceId
+| summarize IsolationsPerDay = dcount(DeviceId) by bin(IsolationTime, 1d)
+| order by IsolationTime asc
+```
+
+Shows spikes in isolation activity — useful for identifying incidents or campaigns.
+
+---
+
+## Isolations by OS Platform (Pie/Donut chart)
+
+```kql
+DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize arg_max(Timestamp, *) by DeviceId
+| summarize Count = count() by OSPlatform
+| order by Count desc
+```
+
+---
+
+## Isolations by Machine Group (Bar chart)
+
+```kql
+DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize arg_max(Timestamp, *) by DeviceId
+| summarize Count = count() by MachineGroup
+| order by Count desc
+```
+
+Helps identify which business units/departments are most affected.
+
+---
+
+## Isolation Duration Distribution (Histogram/Column chart)
+
+```kql
+// Reuse your main query, then bucket the durations
+DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize IsolationTime = min(Timestamp) by DeviceId
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp > ago(90d)
+    | summarize arg_max(Timestamp, *) by DeviceId
+) on DeviceId
+| extend IsCurrentlyIsolated = tostring(MitigationStatus) contains "true"
+| extend DurationHours = datetime_diff('hour', iff(IsCurrentlyIsolated, now(), Timestamp), IsolationTime)
+| extend DurationBucket = case(
+    DurationHours < 1, "< 1 hour",
+    DurationHours < 4, "1-4 hours",
+    DurationHours < 24, "4-24 hours",
+    DurationHours < 72, "1-3 days",
+    DurationHours < 168, "3-7 days",
+    "> 7 days"
+)
+| summarize Count = count() by DurationBucket
+```
+
+Shows operational efficiency — are devices sitting isolated for too long?
+
+---
+
+## Repeat Offenders (Table)
+
+```kql
+DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize IsolationCount = dcount(bin(Timestamp, 1d)) by DeviceId, DeviceName
+| where IsolationCount > 1
+| order by IsolationCount desc
+| take 10
+```
+
+Devices that have been isolated multiple times — might indicate persistent issues.
+
+---
+
+## Exposure Level at Isolation (Stacked bar or Donut)
+
+```kql
+DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| summarize arg_max(Timestamp, *) by DeviceId
+| summarize Count = count() by ExposureLevel
+| order by Count desc
+```
+
+Were high-exposure devices being isolated more often?
+
+---
+
+## Currently Isolated - Long Duration Alert (Table)
+
+```kql
+// Devices isolated for more than 3 days — may need attention
+DeviceInfo
+| where Timestamp > ago(90d)
+| summarize arg_max(Timestamp, *) by DeviceId
+| where tostring(MitigationStatus) contains "true"
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp > ago(90d)
+    | where tostring(MitigationStatus) contains "true"
+    | summarize IsolationTime = min(Timestamp) by DeviceId
+) on DeviceId
+| extend DurationDays = datetime_diff('day', now(), IsolationTime)
+| where DurationDays > 3
+| project DeviceName, IsolationTime, DurationDays, MachineGroup, PublicIP
+| order by DurationDays desc
+```
+
+Actionable list for follow-up.
+
+---
+
+## Related Alerts for Isolated Devices (if you have AlertInfo/AlertEvidence)
+
+```kql
+let IsolatedDevices = DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) contains "true"
+| distinct DeviceId;
+
+AlertEvidence
+| where Timestamp > ago(90d)
+| where DeviceId in (IsolatedDevices)
+| join kind=inner AlertInfo on AlertId
+| summarize AlertCount = count() by Title, Severity
+| order by AlertCount desc
+```
+
+Shows what alerts triggered on isolated devices — context for *why* they were isolated.
+
+---
+
+## Suggested Dashboard Layout
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  [Currently Isolated]  [Total 90d]  [Released]  [Avg Duration]  │  ← KPI Cards
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   [Isolation Trend Over Time - Line Chart]                      │
+│                                                                 │
+├──────────────────────────────┬──────────────────────────────────┤
+│ [By OS Platform - Donut]     │ [By Machine Group - Bar]         │
+├──────────────────────────────┴──────────────────────────────────┤
+│                                                                 │
+│   [Main Device Table - your existing query]                     │
+│                                                                 │
+├──────────────────────────────┬──────────────────────────────────┤
+│ [Duration Distribution]      │ [Repeat Offenders]               │
+├──────────────────────────────┴──────────────────────────────────┤
+│   [Long Duration Alert Table - needs attention]                 │
+└─────────────────────────────────────────────────────────────────┘
+```
