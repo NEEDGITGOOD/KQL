@@ -6,20 +6,27 @@ let LatestDeviceState = DeviceInfo
           LastSeen = Timestamp, 
           CurrentMitigationStatus = MitigationStatus,
           DeviceName, OSPlatform, OSVersion, PublicIP, MachineGroup, ExposureLevel, LoggedOnUsers;
-
 // Get the first isolation time per device
 let IsolationEvents = DeviceInfo
 | where Timestamp > ago(90d)
 | where tostring(MitigationStatus) contains "true"
 | summarize IsolationTime = min(Timestamp) by DeviceId;
-
-// Join them together
+// Find when devices were released (first non-isolated record AFTER being isolated)
+let ReleaseEvents = DeviceInfo
+| where Timestamp > ago(90d)
+| where tostring(MitigationStatus) !contains "true"
+| join kind=inner IsolationEvents on DeviceId
+| where Timestamp > IsolationTime  // Only consider records after isolation started
+| summarize ReleasedTime = min(Timestamp) by DeviceId;
+// Bring it all together
 IsolationEvents
 | join kind=inner LatestDeviceState on DeviceId
+| join kind=leftouter ReleaseEvents on DeviceId  // leftouter because not all devices are released
 | extend IsCurrentlyIsolated = tostring(CurrentMitigationStatus) contains "true"
-| extend IsolationDuration = iff(IsCurrentlyIsolated, 
-                                  format_timespan(now() - IsolationTime, 'd.hh:mm'),
-                                  "Released")
+| extend IsolationEndTime = iff(IsCurrentlyIsolated, now(), ReleasedTime)
+| extend IsolationDurationTimespan = IsolationEndTime - IsolationTime
+| extend IsolationDuration = format_timespan(IsolationDurationTimespan, 'd.hh:mm')
+| extend Status = iff(IsCurrentlyIsolated, "🔒 Isolated", "✅ Released")
 // Handle LoggedOnUsers
 | extend LoggedOnUsers = todynamic(LoggedOnUsers)
 | extend LoggedOnUsers = iif(isnull(LoggedOnUsers) or array_length(LoggedOnUsers) == 0,
@@ -29,14 +36,16 @@ IsolationEvents
 | extend UserName = coalesce(tostring(LoggedOnUsers.UserName), "N/A")
 | project
     DeviceName,
+    Status,
     OSPlatform,
     UserName,
     OSVersion,
     IsolationTime = format_datetime(IsolationTime, 'yyyy-MM-dd HH:mm'),
-    LastSeen = format_datetime(LastSeen, 'yyyy-MM-dd HH:mm'),
+    ReleasedTime = iff(IsCurrentlyIsolated, "—", format_datetime(ReleasedTime, 'yyyy-MM-dd HH:mm')),
     IsolationDuration,
-    IsCurrentlyIsolated,
+    LastSeen = format_datetime(LastSeen, 'yyyy-MM-dd HH:mm'),
     PublicIP,
     MachineGroup,
-    ExposureLevel
+    ExposureLevel,
+    IsCurrentlyIsolated
 | order by IsCurrentlyIsolated desc, IsolationTime desc
