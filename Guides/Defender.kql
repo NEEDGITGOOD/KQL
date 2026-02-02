@@ -1,7 +1,7 @@
 // === Set your target URL here ===
 let TargetUrl = "https://example.com/suspicious-link";
 // ================================
-// Part 1: Emails that contained the URL
+// Get all emails containing the URL
 let EmailsWithUrl = EmailUrlInfo
     | where Timestamp > ago(30d)
     | where Url has TargetUrl
@@ -16,32 +16,33 @@ let EmailsWithUrl = EmailUrlInfo
         RecipientEmailAddress,
         Subject,
         Url,
-        DeliveryAction,
-        DeliveryLocation;
-// Part 2: Users who actually clicked the URL
+        DeliveryAction;
+// Get all clicks on that URL
 let Clicks = UrlClickEvents
     | where Timestamp > ago(30d)
     | where Url has TargetUrl
-    | project
-        ClickTimestamp = Timestamp,
-        Url,
-        AccountUpn,
-        NetworkMessageId,
-        ActionType,
-        IsClickedThrough;
-// Combine: show emails enriched with click data
+    | project NetworkMessageId, AccountUpn, IsClickedThrough;
+// Join and summarize per email/campaign
 EmailsWithUrl
 | join kind=leftouter Clicks on NetworkMessageId
+| summarize
+    FirstSeen          = min(Timestamp),
+    TotalRecipients    = dcount(RecipientEmailAddress),
+    TotalClickers      = dcount(AccountUpn),
+    ClickedThroughWarning = dcountif(AccountUpn, IsClickedThrough == true),
+    WhoClicked         = make_set(AccountUpn, 100),
+    AllRecipients      = make_set(RecipientEmailAddress, 100)
+    by Subject, SenderFromAddress, Url
+| extend ClickRate = round(toreal(TotalClickers) / toreal(TotalRecipients) * 100, 1)
 | project
-    EmailTimestamp = Timestamp,
-    ClickTimestamp,
+    FirstSeen,
     SenderFromAddress,
-    RecipientEmailAddress,
-    ClickedBy = AccountUpn,
     Subject,
     Url,
-    DeliveryAction,
-    DeliveryLocation,
-    ActionType,
-    IsClickedThrough
-| order by ClickTimestamp desc, EmailTimestamp desc
+    TotalRecipients,
+    TotalClickers,
+    ClickRate,
+    ClickedThroughWarning,
+    WhoClicked,
+    AllRecipients
+| order by TotalClickers desc
