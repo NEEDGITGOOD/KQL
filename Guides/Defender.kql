@@ -11,68 +11,81 @@ let AllEmails = EmailUrlInfo
         EmailEvents
         | where Timestamp > ago(30d)
     ) on NetworkMessageId
-    // Strip FW:/RE:/FWD: prefixes so originals and forwards group together
     | extend NormalizedSubject = trim_start(@"^([\s]*([Ff][Ww][Dd]?|[Rr][Ee])[\s]*:[\s]*)+", Subject);
 //
-// Step 2: Clicks
+// Step 2: Clicks — only actual allowed clicks
 //
 let Clicks = UrlClickEvents
     | where Timestamp > ago(30d)
     | where Url has TargetUrl
-    | project NetworkMessageId, AccountUpn, IsClickedThrough;
+    | where ActionType == "ClickAllowed"
+    | project ClickTimestamp = Timestamp, Url, AccountUpn, IsClickedThrough, NetworkMessageId;
 //
-// Step 3: Find the original external attacker per campaign (earliest inbound sender)
+// Step 3: Map each click to the email it came from, so we get the subject
+//
+let ClicksWithContext = Clicks
+    | join kind=inner (
+        AllEmails
+        | project NetworkMessageId, NormalizedSubject, EmailDirection
+    ) on NetworkMessageId
+    | project ClickTimestamp, Url, AccountUpn, IsClickedThrough, NormalizedSubject;
+//
+// Step 4: Original external sender per campaign
 //
 let OriginalSenders = AllEmails
     | where EmailDirection == "Inbound"
     | summarize arg_min(Timestamp, SenderFromAddress) by NormalizedSubject
     | project NormalizedSubject, OriginalSender = SenderFromAddress;
 //
-// Step 4: Join everything and summarize per campaign
+// Step 5: Summarize emails per campaign
 //
-AllEmails
-| join kind=leftouter Clicks on NetworkMessageId
+let CampaignEmails = AllEmails
+    | summarize
+        CampaignStart              = minif(Timestamp, EmailDirection == "Inbound"),
+        OriginalNetworkMsgIds      = make_set_if(NetworkMessageId, EmailDirection == "Inbound", 100),
+        OriginalInternetMsgIds     = make_set_if(InternetMessageId, EmailDirection == "Inbound", 100),
+        OriginalTimestamps         = make_set_if(Timestamp, EmailDirection == "Inbound", 100),
+        DirectRecipients           = make_set_if(RecipientEmailAddress, EmailDirection == "Inbound", 100),
+        InternalForwarders         = make_set_if(SenderFromAddress, EmailDirection == "Intra-org", 100),
+        ForwardNetworkMsgIds       = make_set_if(NetworkMessageId, EmailDirection == "Intra-org", 100),
+        ForwardTimestamps          = make_set_if(Timestamp, EmailDirection == "Intra-org", 100),
+        ForwardRecipients          = make_set_if(RecipientEmailAddress, EmailDirection == "Intra-org", 100)
+        by NormalizedSubject, Url;
+//
+// Step 6: Summarize clicks per campaign
+//
+let CampaignClicks = ClicksWithContext
+    | summarize
+        TotalClickers          = dcount(AccountUpn),
+        ClickedThroughWarning  = dcountif(AccountUpn, IsClickedThrough == true),
+        WhoClicked             = make_set(AccountUpn, 100)
+        by NormalizedSubject, Url;
+//
+// Step 7: Bring it all together
+//
+CampaignEmails
+| join kind=leftouter CampaignClicks on NormalizedSubject, Url
 | join kind=leftouter OriginalSenders on NormalizedSubject
-| summarize
-    // Original phishing email details
-    CampaignStart              = minif(Timestamp, EmailDirection == "Inbound"),
-    OriginalSender             = take_any(OriginalSender),
-    OriginalNetworkMsgIds      = make_set_if(NetworkMessageId, EmailDirection == "Inbound", 100),
-    OriginalInternetMsgIds     = make_set_if(InternetMessageId, EmailDirection == "Inbound", 100),
-    OriginalTimestamps         = make_set_if(Timestamp, EmailDirection == "Inbound", 100),
-    DirectRecipients           = make_set_if(RecipientEmailAddress, EmailDirection == "Inbound", 100),
-    // Internal forward details
-    InternalForwarders         = make_set_if(SenderFromAddress, EmailDirection == "Intra-org", 100),
-    ForwardNetworkMsgIds       = make_set_if(NetworkMessageId, EmailDirection == "Intra-org", 100),
-    ForwardTimestamps          = make_set_if(Timestamp, EmailDirection == "Intra-org", 100),
-    ForwardRecipients          = make_set_if(RecipientEmailAddress, EmailDirection == "Intra-org", 100),
-    // Click stats
-    TotalClickers              = dcount(AccountUpn),
-    ClickedThroughWarning      = dcountif(AccountUpn, IsClickedThrough == true),
-    WhoClicked                 = make_set(AccountUpn, 100)
-    by NormalizedSubject, Url
 | extend
     DirectRecipientCount  = array_length(DirectRecipients),
-    ForwardRecipientCount = array_length(ForwardRecipients)
+    ForwardRecipientCount = array_length(ForwardRecipients),
+    TotalClickers         = coalesce(TotalClickers, 0),
+    ClickedThroughWarning = coalesce(ClickedThroughWarning, 0)
 | project
     CampaignStart,
     OriginalSender,
     Subject = NormalizedSubject,
     Url,
-    // Original email IDs (for remediation / pivot)
     OriginalNetworkMsgIds,
     OriginalInternetMsgIds,
     OriginalTimestamps,
-    // Inbound stats
     DirectRecipientCount,
     DirectRecipients,
-    // Forward stats
     InternalForwarders,
     ForwardNetworkMsgIds,
     ForwardTimestamps,
     ForwardRecipientCount,
     ForwardRecipients,
-    // Clicks
     TotalClickers,
     ClickedThroughWarning,
     WhoClicked
