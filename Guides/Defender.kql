@@ -1,48 +1,79 @@
 // === Set your target URL here ===
 let TargetUrl = "https://example.com/suspicious-link";
 // ================================
-// Get all emails containing the URL
-let EmailsWithUrl = EmailUrlInfo
+//
+// Step 1: All emails containing the URL
+//
+let AllEmails = EmailUrlInfo
     | where Timestamp > ago(30d)
     | where Url has TargetUrl
     | join kind=inner (
         EmailEvents
         | where Timestamp > ago(30d)
     ) on NetworkMessageId
-    | project
-        Timestamp,
-        NetworkMessageId,
-        SenderFromAddress,
-        RecipientEmailAddress,
-        Subject,
-        Url,
-        DeliveryAction;
-// Get all clicks on that URL
+    // Strip FW:/RE:/FWD: prefixes so originals and forwards group together
+    | extend NormalizedSubject = trim_start(@"^([\s]*([Ff][Ww][Dd]?|[Rr][Ee])[\s]*:[\s]*)+", Subject);
+//
+// Step 2: Clicks
+//
 let Clicks = UrlClickEvents
     | where Timestamp > ago(30d)
     | where Url has TargetUrl
     | project NetworkMessageId, AccountUpn, IsClickedThrough;
-// Join and summarize per email/campaign
-EmailsWithUrl
+//
+// Step 3: Find the original external attacker per campaign (earliest inbound sender)
+//
+let OriginalSenders = AllEmails
+    | where EmailDirection == "Inbound"
+    | summarize arg_min(Timestamp, SenderFromAddress) by NormalizedSubject
+    | project NormalizedSubject, OriginalSender = SenderFromAddress;
+//
+// Step 4: Join everything and summarize per campaign
+//
+AllEmails
 | join kind=leftouter Clicks on NetworkMessageId
+| join kind=leftouter OriginalSenders on NormalizedSubject
 | summarize
-    FirstSeen          = min(Timestamp),
-    TotalRecipients    = dcount(RecipientEmailAddress),
-    TotalClickers      = dcount(AccountUpn),
-    ClickedThroughWarning = dcountif(AccountUpn, IsClickedThrough == true),
-    WhoClicked         = make_set(AccountUpn, 100),
-    AllRecipients      = make_set(RecipientEmailAddress, 100)
-    by Subject, SenderFromAddress, Url
-| extend ClickRate = round(toreal(TotalClickers) / toreal(TotalRecipients) * 100, 1)
+    // Original phishing email details
+    CampaignStart              = minif(Timestamp, EmailDirection == "Inbound"),
+    OriginalSender             = take_any(OriginalSender),
+    OriginalNetworkMsgIds      = make_set_if(NetworkMessageId, EmailDirection == "Inbound", 100),
+    OriginalInternetMsgIds     = make_set_if(InternetMessageId, EmailDirection == "Inbound", 100),
+    OriginalTimestamps         = make_set_if(Timestamp, EmailDirection == "Inbound", 100),
+    DirectRecipients           = make_set_if(RecipientEmailAddress, EmailDirection == "Inbound", 100),
+    // Internal forward details
+    InternalForwarders         = make_set_if(SenderFromAddress, EmailDirection == "Intra-org", 100),
+    ForwardNetworkMsgIds       = make_set_if(NetworkMessageId, EmailDirection == "Intra-org", 100),
+    ForwardTimestamps          = make_set_if(Timestamp, EmailDirection == "Intra-org", 100),
+    ForwardRecipients          = make_set_if(RecipientEmailAddress, EmailDirection == "Intra-org", 100),
+    // Click stats
+    TotalClickers              = dcount(AccountUpn),
+    ClickedThroughWarning      = dcountif(AccountUpn, IsClickedThrough == true),
+    WhoClicked                 = make_set(AccountUpn, 100)
+    by NormalizedSubject, Url
+| extend
+    DirectRecipientCount  = array_length(DirectRecipients),
+    ForwardRecipientCount = array_length(ForwardRecipients)
 | project
-    FirstSeen,
-    SenderFromAddress,
-    Subject,
+    CampaignStart,
+    OriginalSender,
+    Subject = NormalizedSubject,
     Url,
-    TotalRecipients,
+    // Original email IDs (for remediation / pivot)
+    OriginalNetworkMsgIds,
+    OriginalInternetMsgIds,
+    OriginalTimestamps,
+    // Inbound stats
+    DirectRecipientCount,
+    DirectRecipients,
+    // Forward stats
+    InternalForwarders,
+    ForwardNetworkMsgIds,
+    ForwardTimestamps,
+    ForwardRecipientCount,
+    ForwardRecipients,
+    // Clicks
     TotalClickers,
-    ClickRate,
     ClickedThroughWarning,
-    WhoClicked,
-    AllRecipients
+    WhoClicked
 | order by TotalClickers desc
