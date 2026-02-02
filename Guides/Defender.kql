@@ -11,9 +11,11 @@ let AllEmails = EmailUrlInfo
         EmailEvents
         | where Timestamp > ago(30d)
     ) on NetworkMessageId
-    | extend NormalizedSubject = trim_start(@"^([\s]*([Ff][Ww][Dd]?|[Rr][Ee])[\s]*:[\s]*)+", Subject);
+    | extend NormalizedSubject = trim_start(
+        @"^([\s]*([Ff][Ww][Dd]?|[Rr][Ee]|[Ww][Gg]|[Aa][Ww]|[Tt][Rr]|[Rr][Vv]|[Ss][Vv]|[Dd][Vv])[\s]*:[\s]*)+",
+        Subject);
 //
-// Step 2: Clicks — only actual allowed clicks
+// Step 2: Clicks — only actually allowed clicks
 //
 let Clicks = UrlClickEvents
     | where Timestamp > ago(30d)
@@ -21,7 +23,7 @@ let Clicks = UrlClickEvents
     | where ActionType == "ClickAllowed"
     | project ClickTimestamp = Timestamp, Url, AccountUpn, IsClickedThrough, NetworkMessageId;
 //
-// Step 3: Map each click to the email it came from, so we get the subject
+// Step 3: Map clicks to campaigns
 //
 let ClicksWithContext = Clicks
     | join kind=inner (
@@ -37,56 +39,107 @@ let OriginalSenders = AllEmails
     | summarize arg_min(Timestamp, SenderFromAddress) by NormalizedSubject
     | project NormalizedSubject, OriginalSender = SenderFromAddress;
 //
-// Step 5: Summarize emails per campaign
+// Step 5: Zscaler web proxy logs
+// RequestContext = the referring URL (our phishing link that redirected)
+// RequestURL    = the final destination (actual payload URL)
+//
+let ZscalerLogs = CommonSecurityLog
+    | where TimeGenerated > ago(30d)
+    | where DeviceVendor == "Zscaler"
+    | where RequestContext has TargetUrl
+    | extend ZscalerUser = tolower(SourceUserName)
+    | project TimeGenerated, ZscalerUser, FinalUrl = RequestURL,
+              ZscalerAction = DeviceAction, ZscalerReason = Activity;
+//
+// Step 6: Map Zscaler to campaigns via the clickers
+//
+let ClickerCampaignMap = ClicksWithContext
+    | extend ClickerLower = tolower(AccountUpn)
+    | distinct ClickerLower, NormalizedSubject;
+//
+let ZscalerPerCampaign = ZscalerLogs
+    | join kind=inner ClickerCampaignMap
+        on $left.ZscalerUser == $right.ClickerLower
+    | summarize
+        FinalUrls      = make_set(FinalUrl, 50),
+        ZscalerBlocked = countif(ZscalerAction == "Blocked"),
+        ZscalerAllowed = countif(ZscalerAction == "Allowed"),
+        ZscalerDetails = make_set(
+            strcat(ZscalerUser, " → ", ZscalerAction, " (", ZscalerReason, ")"), 100)
+        by NormalizedSubject;
+//
+// Step 7: Emails per campaign — with delivery status
 //
 let CampaignEmails = AllEmails
     | summarize
-        CampaignStart              = minif(Timestamp, EmailDirection == "Inbound"),
-        OriginalNetworkMsgIds      = make_set_if(NetworkMessageId, EmailDirection == "Inbound", 100),
-        OriginalInternetMsgIds     = make_set_if(InternetMessageId, EmailDirection == "Inbound", 100),
-        OriginalTimestamps         = make_set_if(Timestamp, EmailDirection == "Inbound", 100),
-        DirectRecipients           = make_set_if(RecipientEmailAddress, EmailDirection == "Inbound", 100),
-        InternalForwarders         = make_set_if(SenderFromAddress, EmailDirection == "Intra-org", 100),
-        ForwardNetworkMsgIds       = make_set_if(NetworkMessageId, EmailDirection == "Intra-org", 100),
-        ForwardTimestamps          = make_set_if(Timestamp, EmailDirection == "Intra-org", 100),
-        ForwardRecipients          = make_set_if(RecipientEmailAddress, EmailDirection == "Intra-org", 100)
+        CampaignStart          = minif(Timestamp, EmailDirection == "Inbound"),
+        OriginalNetworkMsgIds  = make_set_if(NetworkMessageId, EmailDirection == "Inbound", 100),
+        OriginalInternetMsgIds = make_set_if(InternetMessageId, EmailDirection == "Inbound", 100),
+        OriginalTimestamps     = make_set_if(Timestamp, EmailDirection == "Inbound", 100),
+        DirectRecipients       = make_set_if(RecipientEmailAddress, EmailDirection == "Inbound", 100),
+        // Email delivery verdicts
+        EmailsDelivered        = dcountif(NetworkMessageId,
+            EmailDirection == "Inbound" and DeliveryAction == "Delivered"),
+        EmailsBlocked          = dcountif(NetworkMessageId,
+            EmailDirection == "Inbound" and DeliveryAction == "Blocked"),
+        DeliveryBreakdown      = make_set_if(
+            strcat(RecipientEmailAddress, " → ", DeliveryAction, " (", DeliveryLocation, ")"),
+            EmailDirection == "Inbound", 100),
+        // Forwards
+        InternalForwarders     = make_set_if(SenderFromAddress, EmailDirection == "Intra-org", 100),
+        ForwardNetworkMsgIds   = make_set_if(NetworkMessageId, EmailDirection == "Intra-org", 100),
+        ForwardTimestamps      = make_set_if(Timestamp, EmailDirection == "Intra-org", 100),
+        ForwardRecipients      = make_set_if(RecipientEmailAddress, EmailDirection == "Intra-org", 100)
         by NormalizedSubject, Url;
 //
-// Step 6: Summarize clicks per campaign
+// Step 8: Clicks per campaign
 //
 let CampaignClicks = ClicksWithContext
     | summarize
-        TotalClickers          = dcount(AccountUpn),
-        ClickedThroughWarning  = dcountif(AccountUpn, IsClickedThrough == true),
-        WhoClicked             = make_set(AccountUpn, 100)
+        TotalClickers         = dcount(AccountUpn),
+        ClickedThroughWarning = dcountif(AccountUpn, IsClickedThrough == true),
+        WhoClicked            = make_set(AccountUpn, 100)
         by NormalizedSubject, Url;
 //
-// Step 7: Bring it all together
+// Step 9: Bring it all together
 //
 CampaignEmails
 | join kind=leftouter CampaignClicks on NormalizedSubject, Url
+| join kind=leftouter ZscalerPerCampaign on NormalizedSubject
 | join kind=leftouter OriginalSenders on NormalizedSubject
 | extend
     DirectRecipientCount  = array_length(DirectRecipients),
     ForwardRecipientCount = array_length(ForwardRecipients),
     TotalClickers         = coalesce(TotalClickers, 0),
-    ClickedThroughWarning = coalesce(ClickedThroughWarning, 0)
+    ClickedThroughWarning = coalesce(ClickedThroughWarning, 0),
+    ZscalerBlocked        = coalesce(ZscalerBlocked, 0),
+    ZscalerAllowed        = coalesce(ZscalerAllowed, 0)
 | project
     CampaignStart,
     OriginalSender,
     Subject = NormalizedSubject,
     Url,
+    // Email IDs
     OriginalNetworkMsgIds,
     OriginalInternetMsgIds,
     OriginalTimestamps,
+    // Email delivery
+    EmailsDelivered,
+    EmailsBlocked,
+    DeliveryBreakdown,
     DirectRecipientCount,
     DirectRecipients,
+    // Forwards
     InternalForwarders,
-    ForwardNetworkMsgIds,
-    ForwardTimestamps,
     ForwardRecipientCount,
     ForwardRecipients,
+    // Clicks
     TotalClickers,
     ClickedThroughWarning,
-    WhoClicked
+    WhoClicked,
+    // Zscaler — final payload & proxy verdict
+    FinalUrls,
+    ZscalerAllowed,
+    ZscalerBlocked,
+    ZscalerDetails
 | order by TotalClickers desc
