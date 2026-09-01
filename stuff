@@ -1,0 +1,676 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics workspace with Microsoft Sentinel enabled"
+      }
+    },
+    "workbookDisplayName": {
+      "type": "string",
+      "defaultValue": "Detection Quality & Health",
+      "metadata": {
+        "description": "Workbook display name"
+      }
+    },
+    "workbookId": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": {
+        "description": "Unique workbook resource GUID"
+      }
+    },
+    "workbookLocation": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    }
+  },
+  "variables": {
+    "workbookContent": {
+      "version": "Notebook/1.0",
+      "items": [
+        {
+          "type": 1,
+          "content": {
+            "json": "# Detection Quality & Health\nMicrosoft Sentinel analytics-rule performance, fidelity, noise, workload and execution health. **FP % excludes Benign Positive and Undetermined; Noise % = FP + BP; Malicious yield % = TP / conclusive classifications.**"
+          },
+          "name": "text-19d8f1d0-efd2-454a-9b05-8a2d6b461848"
+        },
+        {
+          "type": 9,
+          "content": {
+            "version": "KqlParameterItem/1.0",
+            "parameters": [
+              {
+                "id": "45da0db4-b9c8-4aea-bc52-3005a58057cf",
+                "version": "KqlParameterItem/1.0",
+                "name": "View",
+                "label": "Dashboard view",
+                "type": 10,
+                "isRequired": true,
+                "jsonData": "[{\"value\": \"Overview\", \"label\": \"Overview\", \"selected\": true}, {\"value\": \"Tuning\", \"label\": \"Tuning candidates\"}, {\"value\": \"Trends\", \"label\": \"Trends\"}, {\"value\": \"Rule\", \"label\": \"Rule drill-down\"}, {\"value\": \"Health\", \"label\": \"Health & audit\"}]",
+                "typeSettings": {
+                  "additionalResourceOptions": []
+                }
+              }
+            ],
+            "style": "pills",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces"
+          },
+          "name": "navigation"
+        },
+        {
+          "type": 9,
+          "content": {
+            "version": "KqlParameterItem/1.0",
+            "parameters": [
+              {
+                "id": "f37c77f9-4059-47be-9889-42064d3d2a82",
+                "version": "KqlParameterItem/1.0",
+                "name": "TimeRange",
+                "label": "Incident creation time",
+                "type": 4,
+                "isRequired": true,
+                "value": {
+                  "durationMs": 2592000000
+                },
+                "typeSettings": {
+                  "selectableValues": [
+                    {
+                      "durationMs": 604800000
+                    },
+                    {
+                      "durationMs": 1209600000
+                    },
+                    {
+                      "durationMs": 2592000000
+                    },
+                    {
+                      "durationMs": 5184000000
+                    },
+                    {
+                      "durationMs": 7776000000
+                    },
+                    {
+                      "durationMs": 15552000000
+                    }
+                  ],
+                  "allowCustom": true
+                }
+              },
+              {
+                "id": "ae40c1fd-cfbd-4dcd-b6f9-7e454b5a1798",
+                "version": "KqlParameterItem/1.0",
+                "name": "Severity",
+                "label": "Severity",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "SecurityIncident | where TimeGenerated >= {TimeRange:start} | summarize arg_max(TimeGenerated, Severity) by IncidentName | summarize Count=dcount(IncidentName) by Severity | where isnotempty(Severity) | project Value=Severity, Label=strcat(Severity, \" (\", Count, \")\") | order by Value asc",
+                "value": [
+                  "value::all"
+                ],
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "selectAllValue": "*"
+                },
+                "timeContext": {
+                  "durationMs": 34560000000
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces"
+              },
+              {
+                "id": "575171f0-2ed0-4f4f-9c27-9b6b4d20d8eb",
+                "version": "KqlParameterItem/1.0",
+                "name": "Tactic",
+                "label": "MITRE tactic",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "SecurityIncident | where TimeGenerated >= {TimeRange:start} | summarize arg_max(TimeGenerated, AdditionalData) by IncidentName | extend T=todynamic(AdditionalData.tactics) | mv-expand T to typeof(string) | where isnotempty(T) | summarize Count=count() by T | project Value=T, Label=strcat(T, \" (\", Count, \")\") | order by Label asc",
+                "value": [
+                  "value::all"
+                ],
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "selectAllValue": "*"
+                },
+                "timeContext": {
+                  "durationMs": 34560000000
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces"
+              },
+              {
+                "id": "ef9926d3-581b-4eab-84e8-ee7624977c6b",
+                "version": "KqlParameterItem/1.0",
+                "name": "Rule",
+                "label": "Analytics rule",
+                "type": 2,
+                "isRequired": true,
+                "multiSelect": true,
+                "quote": "'",
+                "delimiter": ",",
+                "query": "let R=SecurityIncident | where TimeGenerated >= {TimeRange:start} | summarize arg_max(TimeGenerated, RelatedAnalyticRuleIds) by IncidentName | mv-expand RuleRef=RelatedAnalyticRuleIds to typeof(string) | extend RuleId=tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef)) | where isnotempty(RuleId) | distinct RuleId; R | join kind=leftouter (SecurityAlert | where TimeGenerated >= {TimeRange:start} | where ProviderName in (\"ASI Scheduled Alerts\",\"CustomAlertRule\") | extend RuleId=tolower(AlertType) | summarize arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, AlertName) on RuleId | project Value=RuleId, Label=iff(isempty(AlertName), RuleId, AlertName) | order by Label asc",
+                "value": [
+                  "value::all"
+                ],
+                "typeSettings": {
+                  "additionalResourceOptions": [
+                    "value::all"
+                  ],
+                  "selectAllValue": "*"
+                },
+                "timeContext": {
+                  "durationMs": 34560000000
+                },
+                "queryType": 0,
+                "resourceType": "microsoft.operationalinsights/workspaces"
+              },
+              {
+                "id": "5fbce0d5-9342-4123-a57c-971f459aef54",
+                "version": "KqlParameterItem/1.0",
+                "name": "MinSample",
+                "label": "Min conclusive incidents",
+                "type": 1,
+                "isRequired": true,
+                "value": "10"
+              }
+            ],
+            "style": "above",
+            "queryType": 0,
+            "resourceType": "microsoft.operationalinsights/workspaces"
+          },
+          "name": "filters"
+        },
+        {
+          "type": 12,
+          "content": {
+            "version": "NotebookGroup/1.0",
+            "groupType": "editable",
+            "items": [
+              {
+                "type": 1,
+                "content": {
+                  "json": "## Overview\nIncident metrics use the **latest SecurityIncident record** for incidents created in the selected period. Overall incident KPIs are deduplicated even if multiple rules contributed to the same incident.",
+                  "style": "info"
+                },
+                "name": "text-60915aaa-121a-4109-a7fd-da37c62ef5bb"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _SelectedIncidents = _IncidentRule | summarize arg_max(LastModifiedTime, *) by IncidentName;\nlet _S = _SelectedIncidents\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status == \"Closed\"),\n            TP=dcountif(IncidentName, Classification == \"TruePositive\"),\n            BP=dcountif(IncidentName, Classification == \"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification == \"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification == \"Undetermined\");\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId);\nlet _J = _S | extend k=1 | join kind=inner (_A | extend k=1) on k\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         YieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         CoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1);\nunion\n(_J | project Metric=\"Analytics-rule incidents\", Value=todouble(Incidents)),\n(_J | project Metric=\"Alerts\", Value=todouble(Alerts)),\n(_J | project Metric=\"True positive\", Value=todouble(TP)),\n(_J | project Metric=\"Benign positive\", Value=todouble(BP)),\n(_J | project Metric=\"False positive\", Value=todouble(FP)),\n(_J | project Metric=\"Undetermined\", Value=todouble(Undetermined)),\n(_J | project Metric=\"FP %\", Value=FPPercent),\n(_J | project Metric=\"Noise %\", Value=NoisePercent),\n(_J | project Metric=\"Malicious yield %\", Value=YieldPercent),\n(_J | project Metric=\"Classification coverage %\", Value=CoveragePercent)",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "tiles",
+                  "title": "Detection KPIs",
+                  "tileSettings": {
+                    "titleContent": {
+                      "columnMatch": "Metric",
+                      "formatter": 1
+                    },
+                    "leftContent": {
+                      "columnMatch": "Value",
+                      "formatter": 12,
+                      "formatOptions": {
+                        "palette": "auto"
+                      }
+                    },
+                    "showBorder": true,
+                    "size": "auto"
+                  }
+                },
+                "name": "query-46426a33-1547-4e4c-8b1b-35954844fa7e"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| summarize arg_max(LastModifiedTime, *) by IncidentName\n| extend Outcome=case(Classification==\"TruePositive\",\"True Positive\", Classification==\"BenignPositive\",\"Benign Positive\", Classification==\"FalsePositive\",\"False Positive\", Classification==\"Undetermined\",\"Undetermined\", Status!=\"Closed\",\"Open\", \"Unclassified\")\n| summarize Incidents=dcount(IncidentName) by Outcome\n| order by Incidents desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "piechart",
+                  "title": "Incident outcomes"
+                },
+                "name": "query-80e7c660-0f18-43e8-a335-4b25f14f7e30",
+                "customWidth": "35"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _I = _IncidentRule\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status==\"Closed\"),\n            TP=dcountif(IncidentName, Classification==\"TruePositive\"),\n            BP=dcountif(IncidentName, Classification==\"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification==\"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification==\"Undetermined\") by RuleId;\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId), arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, Alerts, AlertName;\n_I\n| join kind=fullouter _A on RuleId\n| extend RuleId=coalesce(RuleId, RuleId1), Incidents=coalesce(Incidents,0), Closed=coalesce(Closed,0), TP=coalesce(TP,0), BP=coalesce(BP,0), FP=coalesce(FP,0), Undetermined=coalesce(Undetermined,0), Alerts=coalesce(Alerts,0)\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| extend RuleName=coalesce(AlertName, RuleId)\n| project RuleName, RuleId, Alerts, Incidents, TP, BP, FP, Undetermined, Conclusive, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by (FP+BP) desc, NoisePercent desc\n\n| where Conclusive >= toint({MinSample}) | extend NoiseIncidents=FP+BP | top 15 by NoiseIncidents desc | project RuleName, Alerts, Incidents, NoiseIncidents, FP, BP, NoisePercent, MaliciousYieldPercent",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Top noise-producing rules",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-298f9361-925c-437b-850e-72cbe8a01d7a",
+                "customWidth": "65"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _I = _IncidentRule\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status==\"Closed\"),\n            TP=dcountif(IncidentName, Classification==\"TruePositive\"),\n            BP=dcountif(IncidentName, Classification==\"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification==\"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification==\"Undetermined\") by RuleId;\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId), arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, Alerts, AlertName;\n_I\n| join kind=fullouter _A on RuleId\n| extend RuleId=coalesce(RuleId, RuleId1), Incidents=coalesce(Incidents,0), Closed=coalesce(Closed,0), TP=coalesce(TP,0), BP=coalesce(BP,0), FP=coalesce(FP,0), Undetermined=coalesce(Undetermined,0), Alerts=coalesce(Alerts,0)\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| extend RuleName=coalesce(AlertName, RuleId)\n| project RuleName, RuleId, Alerts, Incidents, TP, BP, FP, Undetermined, Conclusive, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by (FP+BP) desc, NoisePercent desc\n\n| where Conclusive >= toint({MinSample}) | top 15 by TP desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Rules generating the most true positives",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-bfe86553-1e43-478c-a491-fbb6dee2730a"
+              }
+            ]
+          },
+          "name": "Overview group",
+          "conditionalVisibility": {
+            "parameterName": "View",
+            "comparison": "isEqualTo",
+            "value": "Overview"
+          }
+        },
+        {
+          "type": 12,
+          "content": {
+            "version": "NotebookGroup/1.0",
+            "groupType": "editable",
+            "items": [
+              {
+                "type": 1,
+                "content": {
+                  "json": "## Tuning candidates\nPrioritize **noise volume + noise percentage + analyst effort**, not FP % alone. Multi-rule incidents inherit the incident disposition for every contributing rule, so per-rule outcomes are attribution signals rather than alert-level ground truth.",
+                  "style": "info"
+                },
+                "name": "text-7c0dfe25-6fa1-4f29-93b8-3949cb4dcc7e"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _I = _IncidentRule\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status==\"Closed\"),\n            TP=dcountif(IncidentName, Classification==\"TruePositive\"),\n            BP=dcountif(IncidentName, Classification==\"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification==\"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification==\"Undetermined\") by RuleId;\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId), arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, Alerts, AlertName;\n_I\n| join kind=fullouter _A on RuleId\n| extend RuleId=coalesce(RuleId, RuleId1), Incidents=coalesce(Incidents,0), Closed=coalesce(Closed,0), TP=coalesce(TP,0), BP=coalesce(BP,0), FP=coalesce(FP,0), Undetermined=coalesce(Undetermined,0), Alerts=coalesce(Alerts,0)\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| extend RuleName=coalesce(AlertName, RuleId)\n| project RuleName, RuleId, Alerts, Incidents, TP, BP, FP, Undetermined, Conclusive, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by (FP+BP) desc, NoisePercent desc\n\n| where Conclusive >= toint({MinSample})",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Rule quality matrix",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-85b4ea37-81fe-4f1d-adc0-0149797ada36"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _I = _IncidentRule\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status==\"Closed\"),\n            TP=dcountif(IncidentName, Classification==\"TruePositive\"),\n            BP=dcountif(IncidentName, Classification==\"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification==\"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification==\"Undetermined\") by RuleId;\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId), arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, Alerts, AlertName;\n_I\n| join kind=fullouter _A on RuleId\n| extend RuleId=coalesce(RuleId, RuleId1), Incidents=coalesce(Incidents,0), Closed=coalesce(Closed,0), TP=coalesce(TP,0), BP=coalesce(BP,0), FP=coalesce(FP,0), Undetermined=coalesce(Undetermined,0), Alerts=coalesce(Alerts,0)\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| extend RuleName=coalesce(AlertName, RuleId)\n| project RuleName, RuleId, Alerts, Incidents, TP, BP, FP, Undetermined, Conclusive, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by (FP+BP) desc, NoisePercent desc\n\n| where Conclusive >= toint({MinSample})\n| where Alerts > 0\n| extend AlertsPerTP=round(todouble(Alerts)/max_of(TP,1),1), NoiseIncidents=FP+BP\n| project RuleName, Alerts, Incidents, TP, NoiseIncidents, NoisePercent, MaliciousYieldPercent, AlertsPerTP, ClassificationCoveragePercent\n| order by Alerts desc, MaliciousYieldPercent asc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "High-volume / low-value rules",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-9399f451-ff20-4ce4-a1eb-596fad73d311"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _Touches = SecurityIncident\n| where TimeGenerated >= {TimeRange:start}\n| where ModifiedBy !in (\"Alert Grouping\", \"Fusion\", \"Incident created from alert\")\n| where ModifiedBy !contains \"Automation rule\"\n| summarize AnalystTouchProxy=count() by IncidentName;\n_IncidentRule\n| join kind=leftouter _Touches on IncidentName\n| extend TriageMinutes=tolong((FirstModifiedTime-CreatedTime)/1m), ClosureHours=toreal((ClosedTime-CreatedTime)/1h), AnalystTouchProxy=coalesce(AnalystTouchProxy,0)\n| summarize Incidents=dcount(IncidentName), TotalTouches=sum(AnalystTouchProxy), MedianTriageMinutes=percentile(TriageMinutes,50), P90TriageMinutes=percentile(TriageMinutes,90), MedianClosureHours=percentile(ClosureHours,50) by RuleId\n| join kind=leftouter _RuleNames on RuleId\n| extend RuleName=coalesce(RuleName,RuleId), TouchesPerIncident=round(todouble(TotalTouches)/max_of(Incidents,1),2)\n| project RuleName, RuleId, Incidents, TotalTouches, TouchesPerIncident, MedianTriageMinutes, P90TriageMinutes, MedianClosureHours\n| top 25 by TotalTouches desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Analyst effort proxy by rule",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-d8127f6c-f532-48f8-b85b-9a7865c85fd3"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| where Classification in (\"FalsePositive\",\"BenignPositive\")\n| join kind=leftouter _RuleNames on RuleId\n| extend RuleName=coalesce(RuleName,RuleId), Reason=iff(isempty(ClassificationReason),\"No reason supplied\",ClassificationReason)\n| summarize Incidents=dcount(IncidentName) by RuleName, Classification, Reason\n| top 50 by Incidents desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "False/benign positive reasons",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-7ddcab47-8727-42e5-aed3-6572cde0f2b4"
+              }
+            ]
+          },
+          "name": "Tuning group",
+          "conditionalVisibility": {
+            "parameterName": "View",
+            "comparison": "isEqualTo",
+            "value": "Tuning"
+          }
+        },
+        {
+          "type": 12,
+          "content": {
+            "version": "NotebookGroup/1.0",
+            "groupType": "editable",
+            "items": [
+              {
+                "type": 1,
+                "content": {
+                  "json": "## Trends\nQuality ratios use **incident creation cohorts**. Recent cohorts can look artificially good/bad until analysts close and classify incidents, so read them together with classification coverage.",
+                  "style": "info"
+                },
+                "name": "text-6a8ec449-f247-4ae6-a6d0-40b5aaaef2e2"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| summarize arg_max(LastModifiedTime, *) by IncidentName\n| summarize TP=dcountif(IncidentName, Classification==\"TruePositive\"), BP=dcountif(IncidentName, Classification==\"BenignPositive\"), FP=dcountif(IncidentName, Classification==\"FalsePositive\"), Undetermined=dcountif(IncidentName, Classification==\"Undetermined\"), Total=dcount(IncidentName) by Time=bin(CreatedTime,1d)\n| order by Time asc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "timechart",
+                  "title": "Incident outcomes over time"
+                },
+                "name": "query-11087e5e-3279-49ae-8e12-2d533fcee7aa"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| summarize arg_max(LastModifiedTime, *) by IncidentName\n| summarize Closed=dcountif(IncidentName, Status==\"Closed\"), TP=dcountif(IncidentName, Classification==\"TruePositive\"), BP=dcountif(IncidentName, Classification==\"BenignPositive\"), FP=dcountif(IncidentName, Classification==\"FalsePositive\") by Time=bin(CreatedTime,7d)\n| extend Conclusive=TP+BP+FP, FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1), NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1), MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1), ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| project Time, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by Time asc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "timechart",
+                  "title": "Weekly quality ratios"
+                },
+                "name": "query-cbc3c5c7-e1eb-4e20-9f36-58ac75b986b7"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic})\n| summarize Alerts=dcount(SystemAlertId) by Time=bin(TimeGenerated,1d)\n| order by Time asc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "timechart",
+                  "title": "Analytics-rule alert volume"
+                },
+                "name": "query-68e0e6ef-289b-40ea-a608-e4c0fe93a674"
+              }
+            ]
+          },
+          "name": "Trends group",
+          "conditionalVisibility": {
+            "parameterName": "View",
+            "comparison": "isEqualTo",
+            "value": "Trends"
+          }
+        },
+        {
+          "type": 12,
+          "content": {
+            "version": "NotebookGroup/1.0",
+            "groupType": "editable",
+            "items": [
+              {
+                "type": 1,
+                "content": {
+                  "json": "## Rule drill-down\nSelect one Analytics Rule in the global filter for the cleanest view. Multiple selected rules are supported, but the summary will show one row per rule.",
+                  "style": "info"
+                },
+                "name": "text-8b7bb079-3329-4bed-b8d3-9561b57d2ba0"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\nlet _I = _IncidentRule\n| summarize Incidents=dcount(IncidentName), Closed=dcountif(IncidentName, Status==\"Closed\"),\n            TP=dcountif(IncidentName, Classification==\"TruePositive\"),\n            BP=dcountif(IncidentName, Classification==\"BenignPositive\"),\n            FP=dcountif(IncidentName, Classification==\"FalsePositive\"),\n            Undetermined=dcountif(IncidentName, Classification==\"Undetermined\") by RuleId;\nlet _A = SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic}) | summarize Alerts=dcount(SystemAlertId), arg_max(TimeGenerated, AlertName) by RuleId | project RuleId, Alerts, AlertName;\n_I\n| join kind=fullouter _A on RuleId\n| extend RuleId=coalesce(RuleId, RuleId1), Incidents=coalesce(Incidents,0), Closed=coalesce(Closed,0), TP=coalesce(TP,0), BP=coalesce(BP,0), FP=coalesce(FP,0), Undetermined=coalesce(Undetermined,0), Alerts=coalesce(Alerts,0)\n| extend Conclusive=TP+BP+FP,\n         FPPercent=round(100.0*FP/max_of(TP+BP+FP,1),1),\n         NoisePercent=round(100.0*(FP+BP)/max_of(TP+BP+FP,1),1),\n         MaliciousYieldPercent=round(100.0*TP/max_of(TP+BP+FP,1),1),\n         ClassificationCoveragePercent=round(100.0*(TP+BP+FP)/max_of(Closed,1),1)\n| extend RuleName=coalesce(AlertName, RuleId)\n| project RuleName, RuleId, Alerts, Incidents, TP, BP, FP, Undetermined, Conclusive, FPPercent, NoisePercent, MaliciousYieldPercent, ClassificationCoveragePercent\n| order by (FP+BP) desc, NoisePercent desc\n\n| order by RuleName asc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Selected rule summary",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-4b46ca18-049a-4c56-b8af-072bfd5d9ee1"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| summarize arg_max(LastModifiedTime, *) by IncidentName\n| summarize Incidents=dcount(IncidentName) by Severity\n| order by Incidents desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "piechart",
+                  "title": "Incident severity"
+                },
+                "name": "query-837a07b9-b0af-48c3-a68f-85f66e3955f0",
+                "customWidth": "35"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "SecurityAlert\n| where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n| where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n| extend RuleId = tolower(AlertType)\n| where isnotempty(RuleId)\n| where \"*\" in ({Rule}) or RuleId in ({Rule})\n| where AlertSeverity in ({Severity}) or \"*\" in ({Severity})\n| where \"*\" in ({Tactic}) or tostring(Tactics) has_any ({Tactic})\n| extend TechniqueList=split(tostring(Techniques), \",\")\n| mv-expand Technique=TechniqueList to typeof(string)\n| extend Technique=trim(\" \", Technique)\n| where isnotempty(Technique)\n| summarize Alerts=dcount(SystemAlertId) by Technique\n| top 25 by Alerts desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Alert MITRE techniques",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-a3fe2364-05d7-4e2e-bf9a-68334fae6f53",
+                "customWidth": "65"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "let _LatestIncidents =\n    SecurityIncident\n    | where TimeGenerated >= {TimeRange:start}\n    | summarize arg_max(TimeGenerated, *) by IncidentName\n    | where CreatedTime between ({TimeRange:start} .. {TimeRange:end})\n    | where Severity in ({Severity}) or \"*\" in ({Severity})\n    | where \"*\" in ({Tactic}) or tostring(AdditionalData.tactics) has_any ({Tactic});\nlet _IncidentRule =\n    _LatestIncidents\n    | mv-expand RuleRef = RelatedAnalyticRuleIds to typeof(string)\n    | extend RuleId = tolower(iif(RuleRef contains \"/alertRules/\", extract(@\"/alertRules/([^/]+)$\", 1, RuleRef), RuleRef))\n    | where isnotempty(RuleId)\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | distinct IncidentName, IncidentNumber, RuleId, CreatedTime, ClosedTime, FirstModifiedTime, LastModifiedTime,\n               Severity, Status, Classification, ClassificationReason, ClassificationComment, IncidentUrl, Title, ModifiedBy,\n               Comments, Tasks, AdditionalData;\nlet _RuleNames =\n    SecurityAlert\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where ProviderName in (\"ASI Scheduled Alerts\", \"CustomAlertRule\")\n    | extend RuleId = tolower(AlertType)\n    | where isnotempty(RuleId)\n    | summarize arg_max(TimeGenerated, AlertName, Tactics, Techniques, AlertSeverity) by RuleId\n    | project RuleId, RuleName=AlertName, RuleTactics=Tactics, RuleTechniques=Techniques;\n_IncidentRule\n| join kind=leftouter _RuleNames on RuleId\n| extend RuleName=coalesce(RuleName,RuleId), TriageMinutes=round(toreal((FirstModifiedTime-CreatedTime)/1m),1), ClosureHours=round(toreal((ClosedTime-CreatedTime)/1h),1), CommentCount=array_length(Comments), TaskCount=array_length(Tasks)\n| project CreatedTime, RuleName, IncidentNumber, Title, Severity, Status, Classification, ClassificationReason, TriageMinutes, ClosureHours, CommentCount, TaskCount, IncidentUrl\n| order by CreatedTime desc\n| take 250",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Recent incidents",
+                  "gridSettings": {
+                    "formatters": [
+                      {
+                        "columnMatch": "IncidentUrl",
+                        "formatter": 7,
+                        "formatOptions": {
+                          "linkTarget": "Url",
+                          "linkLabel": "Open incident >"
+                        }
+                      }
+                    ],
+                    "filter": true
+                  }
+                },
+                "name": "query-9c4f47f2-cbc4-453d-91e6-be1362ed1663"
+              }
+            ]
+          },
+          "name": "Rule group",
+          "conditionalVisibility": {
+            "parameterName": "View",
+            "comparison": "isEqualTo",
+            "value": "Rule"
+          }
+        },
+        {
+          "type": 12,
+          "content": {
+            "version": "NotebookGroup/1.0",
+            "groupType": "editable",
+            "items": [
+              {
+                "type": 1,
+                "content": {
+                  "json": "## Health & audit\nThese panels require Sentinel **health and audit monitoring**. If the tables are unavailable, the queries are built with fuzzy unions so the workbook remains usable, but the panels may be empty. Health/audit data is not retroactive.",
+                  "style": "info"
+                },
+                "name": "text-4592d048-a45b-4259-9848-eebde0673e02"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "union isfuzzy=true\n(\n    SentinelHealth\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where SentinelResourceType =~ \"Analytics rule\"\n    | where OperationName in (\"Scheduled analytics rule run\",\"NRT analytics rule run\")\n    | extend RuleId=tolower(tostring(ExtendedProperties[\"RuleId\"])),\n             AlertsGenerated=toint(ExtendedProperties[\"AlertsGeneratedAmount\"]),\n             QueryResults=toint(ExtendedProperties[\"QueryResultAmount\"]),\n             EntitiesGenerated=toint(ExtendedProperties[\"EntitiesGeneratedAmount\"]),\n             EntitiesDropped=toint(ExtendedProperties[\"EntitiesDroppedDueToMappingIssuesAmount\"])\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | summarize Runs=count(), FailedRuns=countif(Status==\"Failure\"), AlertsGenerated=sum(AlertsGenerated), QueryResults=sum(QueryResults), EntitiesGenerated=sum(EntitiesGenerated), EntitiesDropped=sum(EntitiesDropped), LastRun=max(TimeGenerated) by RuleId, RuleName=SentinelResourceName\n    | extend FailurePercent=round(100.0*FailedRuns/max_of(Runs,1),1), EntityDropPercent=round(100.0*EntitiesDropped/max_of(EntitiesGenerated+EntitiesDropped,1),1)\n    | project RuleName, RuleId, Runs, FailedRuns, FailurePercent, AlertsGenerated, QueryResults, EntitiesGenerated, EntitiesDropped, EntityDropPercent, LastRun\n),\n(datatable(RuleName:string,RuleId:string,Runs:long,FailedRuns:long,FailurePercent:real,AlertsGenerated:long,QueryResults:long,EntitiesGenerated:long,EntitiesDropped:long,EntityDropPercent:real,LastRun:datetime)[])\n| order by FailedRuns desc, EntityDropPercent desc",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Analytics rule execution health",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-588d3313-d10f-4e9a-8288-cb0831e2bb3a"
+              },
+              {
+                "type": 3,
+                "content": {
+                  "version": "KqlItem/1.0",
+                  "query": "union isfuzzy=true\n(\n    SentinelAudit\n    | where TimeGenerated between ({TimeRange:start} .. {TimeRange:end})\n    | where OperationName in (\"Microsoft.SecurityInsights/alertRules/Write\",\"Microsoft.SecurityInsights/alertRules/Delete\")\n    | extend RuleId=tolower(extract(@\"/alertRules/([^/]+)$\",1,tostring(ExtendedProperties[\"ResourceId\"]))),\n             Caller=tostring(ExtendedProperties[\"CallerName\"]),\n             ChangedFields=tostring(ExtendedProperties[\"ResourceDiffMemberNames\"])\n    | where \"*\" in ({Rule}) or RuleId in ({Rule})\n    | project TimeGenerated, RuleName=SentinelResourceName, RuleId, OperationName, Status, Caller, ChangedFields, Description\n),\n(datatable(TimeGenerated:datetime,RuleName:string,RuleId:string,OperationName:string,Status:string,Caller:string,ChangedFields:string,Description:string)[])\n| order by TimeGenerated desc\n| take 250",
+                  "size": 0,
+                  "timeContext": {
+                    "durationMs": 34560000000
+                  },
+                  "queryType": 0,
+                  "resourceType": "microsoft.operationalinsights/workspaces",
+                  "visualization": "table",
+                  "title": "Analytics rule changes",
+                  "gridSettings": {
+                    "filter": true
+                  }
+                },
+                "name": "query-57b98ec2-25aa-401e-948b-bc8ead7a25b4"
+              }
+            ]
+          },
+          "name": "Health group",
+          "conditionalVisibility": {
+            "parameterName": "View",
+            "comparison": "isEqualTo",
+            "value": "Health"
+          }
+        }
+      ],
+      "isLocked": false,
+      "fromTemplateId": "sentinel-DetectionQualityHealth",
+      "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2023-06-01",
+      "name": "[parameters('workbookId')]",
+      "location": "[parameters('workbookLocation')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "[parameters('workbookDisplayName')]",
+        "serializedData": "[string(variables('workbookContent'))]",
+        "version": "1.0",
+        "sourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+        "category": "sentinel",
+        "description": "Detection quality, false/benign positive, tuning, effort, trend, health and audit dashboard for Microsoft Sentinel Analytics Rules."
+      }
+    }
+  ],
+  "outputs": {
+    "workbookResourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Insights/workbooks', parameters('workbookId'))]"
+    }
+  }
+}
