@@ -821,4 +821,402 @@ High volume + High noise = urgent tuning
 
 High volume + High TP yield = important detection, tune carefully
 
-Low volume + 100% FP = probably low 
+Low volume + 100% FP = probably low priority
+
+Zero volume = validation / coverage question
+
+Don't rank purely on percentage.
+
+
+---
+
+Page 3 — Detection value
+
+Show:
+
+Top rules by True Positives
+
+True positives / 100 alerts
+
+True positives / incident
+
+TP severity distribution
+
+MITRE tactics / techniques generating TP activity
+
+This makes sure the project doesn't turn into an exercise in minimizing alerts.
+
+
+---
+
+Page 4 — Trends
+
+For each week/month:
+
+alerts
+incidents
+TP
+BP
+FP
+FP %
+Noise %
+Classification coverage
+
+Allow rule selection.
+
+
+---
+
+Page 5 — Rule drill-down
+
+For one rule:
+
+Rule metadata
+
+Current configuration
+Last modification
+MITRE mapping
+Enabled/disabled
+
+Alerts/day
+Incidents/day
+
+TP/BP/FP
+FP %
+Noise %
+TP yield
+
+Severity distribution
+
+Classification reasons
+
+Top entities causing noise
+
+Median/P90 triage
+Median/P90 close
+
+Execution failures
+Entity mapping failures
+
+Recent tuning changes
+
+Then underneath, a grid containing the actual incidents with links back into Sentinel.
+
+
+---
+
+Page 6 — Tuning effectiveness
+
+Show rule modifications from SentinelAudit.
+
+For selected change:
+
+14d before     14d after
+
+Alerts       3200 -> 1100
+Incidents     410 -> 120
+False pos.    300 ->  52
+Benign         70 ->  25
+True pos.      40 ->  43
+
+FP %          73% -> 43%
+Noise %       90% -> 64%
+
+That's probably the most valuable long-term feature.
+
+
+---
+
+15. Workbook filters
+
+I would expose:
+
+Time Range
+Analytics Rule
+Rule Kind
+Enabled / Disabled
+Severity
+Classification
+Classification Reason
+MITRE Tactic
+MITRE Technique
+Detection Owner
+Data Source / Product
+
+Microsoft Sentinel workbooks support parameterized time ranges, dropdowns, multi-selects, resource selectors and KQL-driven parameters. 
+
+
+---
+
+16. Sentinel Workbook vs Azure Monitor Workbook vs Power BI
+
+My recommendation is unambiguous for the initial implementation:
+
+Option	Verdict	Reason
+
+Microsoft Sentinel Workbook	Best choice	Native SOC workflow, KQL, Sentinel permissions/context, interactive filters
+Azure Monitor Workbook	Essentially same technology	Useful when dashboard spans many Azure services
+Power BI	Phase 2/3	Better executive reporting, semantic modeling, long history, external sharing
+Pure KQL	Foundation	Excellent query layer, not really a dashboard
+
+
+Microsoft Sentinel workbooks are themselves based on Azure Monitor Workbooks, so the first two aren't fundamentally different technologies. 
+
+For a SOC already living in Sentinel, I would build:
+
+KQL functions
+      +
+Sentinel Workbook
+
+first.
+
+Power BI becomes attractive when you need:
+
+multi-workspace reporting
+management reporting
+long-term historical models
+cross-security-platform data
+executive dashboards
+sharing without Sentinel access
+
+Microsoft officially supports exporting Log Analytics KQL into Power BI datasets/reports. 
+
+
+---
+
+17. Tuning priority
+
+I wouldn't create a complicated magic score initially.
+
+Start with four dimensions:
+
+Noise Volume
+Noise %
+Analyst Effort
+Trend
+
+A simple rule table could classify:
+
+Condition	Priority
+
+High FP/BP count + high noise % + rising	Critical
+High volume + moderate noise	High
+Low volume + high noise %	Medium
+High TP + high volume	Review carefully
+Very small sample	Insufficient data
+
+
+Once you have enough historical data, you could calculate:
+
+TuningScore =
+  35% NoiseVolumePercentile
++ 25% NoiseRate
++ 20% EffortPercentile
++ 10% NegativeTrend
++ 10% DetectionHealthPenalty
+
+But the weights are organizational decisions, not universal truth.
+
+
+---
+
+18. Metrics that are more important than FPR alone
+
+This is where I would challenge the original objective.
+
+A rule can have:
+
+0 incidents
+0 false positives
+
+and therefore appear perfect.
+
+But it might simply not detect anything.
+
+Conversely:
+
+1000 alerts
+200 false positives
+100 confirmed compromises
+
+might be one of the most valuable detections you own.
+
+Therefore detection quality needs at least four axes:
+
+Fidelity
+    FP / BP / TP
+
+Value
+    confirmed malicious detections
+
+Operational Cost
+    volume + analyst workload
+
+Reliability
+    rule execution / telemetry / entity mapping health
+
+And there is a fifth dimension Sentinel incidents can't tell you:
+
+Coverage / Recall
+
+You need detection validation to measure that.
+
+For example:
+
+Attack simulation executed
+        ↓
+Expected analytics rule
+        ↓
+Did it fire?
+        ↓
+Was correct entity mapped?
+        ↓
+Was incident generated?
+
+Store results such as:
+
+RuleId
+TestTechnique
+LastTested
+TestPassed
+DetectionLatency
+ExpectedEntities
+EntitiesObserved
+
+Then your mature dashboard can say:
+
+Detection Health
+----------------------------------
+Fidelity              92%
+Noise                  18%
+Rule health            100%
+Last validation        14 days ago
+Validation result      PASS
+MITRE                  T1059.001
+
+That is substantially more meaningful than a standalone FP percentage.
+
+
+---
+
+19. Concrete architecture I would recommend
+
+For your environment, I would build it in three stages.
+
+MVP
+
+SecurityIncident
+SecurityAlert
+       |
+       v
+Reusable KQL
+       |
+       v
+Sentinel Workbook
+
+Implement:
+
+alert volume
+incident volume
+TP/BP/FP
+FP %
+Noise %
+TP yield
+classification coverage
+weekly trends
+rule drilldown
+
+Use RelatedAnalyticRuleIds as the main incident→rule relationship and SecurityAlert for actual alert counts.
+
+Also enforce a SOC closure standard:
+
+TP  = malicious/suspicious confirmed
+BP  = rule was correct, activity expected
+FP  = alert logic/data incorrect
+Undetermined = genuinely unresolved
+
+Without consistent analyst classification, the dashboard will mostly measure analyst habits.
+
+
+---
+
+Phase 2 — Detection Health
+
+Enable and integrate:
+
+SentinelHealth
+SentinelAudit
+
+Microsoft requires auditing/health monitoring to be enabled before those records start being collected. 
+
+Add:
+
+execution failure rate
+entity mapping failures
+rule changes
+before/after tuning
+last modified
+alert generation/run
+
+Then pull the current rule catalog through the Sentinel Alert Rules REST API.
+
+
+---
+
+Phase 3 — Detection Engineering platform
+
+I'd evolve the architecture into:
+
+SentinelHealth
+                         |
+SecurityIncident --- Detection metrics
+       |                 |
+SecurityAlert -----------+
+       |                 |
+SentinelAudit -----------+
+       |                 |
+Rule REST API -----------+
+       |                 |
+Detection Tests ---------+
+       |                 |
+Ticket/Effort data ------+
+                         |
+                         v
+              Curated detection model
+                         |
+               +---------+---------+
+               |                   |
+       Sentinel Workbook       Power BI
+       operational SOC         long-term/reporting
+
+Persist something like:
+
+DetectionRuleInventory_CL
+DetectionOutcome_CL
+DetectionValidation_CL
+
+At that point you no longer have an "FP dashboard."
+
+You have a genuine Detection Engineering / Detection Health dashboard.
+
+One additional future-proofing point: Microsoft is increasingly converging Sentinel SIEM and Defender XDR detections, and Microsoft's current guidance identifies Defender XDR custom detections as the unified direction for new detections. I would therefore use a generic key such as DetectionId + DetectionSource internally rather than designing the model so tightly around SecurityAlert.AlertType that it can never accommodate Defender XDR custom detections later. 
+
+Recommended end state
+
+For the current requirement, I would choose:
+
+Sentinel Workbook
++
+SecurityIncident
++
+SecurityAlert
++
+SentinelHealth
++
+SentinelAudit
++
+daily Analytics Rule inventory snapshot
+
+with FP %, Noise %, Malicious Yield %, Classification Coverage and TP volume treated as the five primary quality KPIs.
+
+That gives you a much more defensible answer to “which detections should we tune?” than false-positive rate alone.
